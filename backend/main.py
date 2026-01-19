@@ -26,12 +26,16 @@ app.add_middleware(
 # 環境変数の読み込み
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OLLAMA_SERVER_URL = os.getenv("OLLAMA_SERVER_URL", "http://localhost:11434")
+VLLM_SERVER_URL = os.getenv("VLLM_SERVER_URL", "http://localhost:8080")
+LOCAL_LLM_BACKEND = os.getenv("LOCAL_LLM_BACKEND", "ollama")  # "ollama" or "vllm"
 OPENAI_EVAL_MODEL = os.getenv("OPENAI_EVAL_MODEL", "gpt-4o")
 
 # リクエストモデル
 class GenerationRequest(BaseModel):
     input_text: str
-    ollama_models: List[str]  # 選択されたOllamaモデルのリスト
+    local_models: List[str] = []  # ローカルモデル（Ollama/vLLM）
+    ollama_models: List[str] = []  # 後方互換性のため残す
+
 
 class EvaluationRequest(BaseModel):
     input_text: str
@@ -147,6 +151,67 @@ async def call_ollama_stream(model: str, prompt: str) -> AsyncGenerator[str, Non
     except Exception as e:
         yield f"[エラー: {str(e)}]"
 
+# vLLM API呼び出し（OpenAI互換API）
+async def call_vllm(model: str, prompt: str) -> str:
+    """vLLMモデルを呼び出し"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{VLLM_SERVER_URL}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"vLLM API エラー ({model}): {str(e)}")
+
+# vLLM API ストリーミング呼び出し
+async def call_vllm_stream(model: str, prompt: str) -> AsyncGenerator[str, None]:
+    """vLLMモデルをストリーミングモードで呼び出し"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            async with client.stream(
+                "POST",
+                f"{VLLM_SERVER_URL}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "stream": True
+                }
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            content = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            pass
+    except Exception as e:
+        yield f"[エラー: {str(e)}]"
+
+# 統合ローカルLLM呼び出し
+async def call_local_llm_stream(model: str, prompt: str) -> AsyncGenerator[str, None]:
+    """現在のバックエンド設定に基づいてローカルLLMを呼び出し"""
+    if LOCAL_LLM_BACKEND == "vllm":
+        async for chunk in call_vllm_stream(model, prompt):
+            yield chunk
+    else:
+        async for chunk in call_ollama_stream(model, prompt):
+            yield chunk
+
+
 # ストリームジェネレーター
 async def stream_generator(input_text: str, ollama_models: List[str]) -> AsyncGenerator[dict, None]:
     """すべてのLLMの出力をSSEイベントとしてストリーミング（パフォーマンスメトリクス付き）"""
@@ -197,8 +262,8 @@ async def stream_generator(input_text: str, ollama_models: List[str]) -> AsyncGe
             }
         }
     
-    # Ollama モデル タスク（メトリクス計測付き）
-    async def stream_ollama(model_name: str):
+    # ローカルモデル タスク（メトリクス計測付き）- Ollama/vLLM両対応
+    async def stream_local_llm(model_name: str):
         full_output = ""
         token_count = 0
         start_time = time.time()
@@ -206,7 +271,7 @@ async def stream_generator(input_text: str, ollama_models: List[str]) -> AsyncGe
         token_times = []
         last_token_time = start_time
         
-        async for chunk in call_ollama_stream(model_name, input_text):
+        async for chunk in call_local_llm_stream(model_name, input_text):
             current_time = time.time()
             if first_token_time is None:
                 first_token_time = current_time
@@ -244,7 +309,7 @@ async def stream_generator(input_text: str, ollama_models: List[str]) -> AsyncGe
     generators = [stream_openai()]
     for model in ollama_models:
         if model:
-            generators.append(stream_ollama(model))
+            generators.append(stream_local_llm(model))
     
     # 並列でストリーミング（各ジェネレーターからのイベントをマージ）
     async def merge_generators():
@@ -347,16 +412,36 @@ async def root():
 
 @app.get("/api/ollama/models")
 async def get_ollama_models():
-    """利用可能なOllamaモデル一覧を取得"""
+    """利用可能なOllamaモデル一覧を取得（後方互換性）"""
+    return await get_local_models()
+
+@app.get("/api/local/models")
+async def get_local_models():
+    """現在のバックエンドで利用可能なモデル一覧を取得"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{OLLAMA_SERVER_URL}/api/tags")
-            response.raise_for_status()
-            data = response.json()
-            models = [model["name"] for model in data.get("models", [])]
-            return {"models": models}
+            if LOCAL_LLM_BACKEND == "vllm":
+                response = await client.get(f"{VLLM_SERVER_URL}/v1/models")
+                response.raise_for_status()
+                data = response.json()
+                models = [model["id"] for model in data.get("data", [])]
+            else:
+                response = await client.get(f"{OLLAMA_SERVER_URL}/api/tags")
+                response.raise_for_status()
+                data = response.json()
+                models = [model["name"] for model in data.get("models", [])]
+            return {"models": models, "backend": LOCAL_LLM_BACKEND}
     except Exception as e:
-        return {"models": [], "error": str(e)}
+        return {"models": [], "backend": LOCAL_LLM_BACKEND, "error": str(e)}
+
+@app.get("/api/local/backend")
+async def get_backend_info():
+    """現在のバックエンド設定情報を取得"""
+    return {
+        "backend": LOCAL_LLM_BACKEND,
+        "ollama_url": OLLAMA_SERVER_URL,
+        "vllm_url": VLLM_SERVER_URL
+    }
 
 @app.post("/api/generate")
 async def generate(request: GenerationRequest):

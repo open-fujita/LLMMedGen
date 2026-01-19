@@ -34,6 +34,7 @@ function App() {
   const [inputText, setInputText] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelLoading, setModelLoading] = useState(true);
+  const [currentBackend, setCurrentBackend] = useState<string>('ollama');
 
   // 3つのウィンドウ用の状態
   const [selectedModel1, setSelectedModel1] = useState<string>('');
@@ -51,13 +52,15 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 利用可能なOllamaモデルを取得
+  // 利用可能なモデルとバックエンド情報を取得
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const response = await axios.get(`${API_URL}/api/ollama/models`);
+        const response = await axios.get(`${API_URL}/api/local/models`);
         const models = response.data.models || [];
+        const backend = response.data.backend || 'ollama';
         setAvailableModels(models);
+        setCurrentBackend(backend);
 
         // 初期選択（利用可能な場合）
         if (models.length > 0) setSelectedModel1(models[0]);
@@ -279,7 +282,12 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>LLM MedGen Tool</h1>
+        <div className="header-title">
+          <h1>LLM MedGen Tool</h1>
+          <span className={`backend-badge ${currentBackend}`}>
+            {currentBackend === 'vllm' ? 'vLLM' : 'Ollama'}
+          </span>
+        </div>
         <p>複数のLLMによるデータ生成と評価ツール</p>
       </header>
 
