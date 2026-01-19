@@ -32,12 +32,14 @@ interface ModelMetrics {
 
 function App() {
   const [inputText, setInputText] = useState('');
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [vllmModels, setVllmModels] = useState<string[]>([]);
   const [modelLoading, setModelLoading] = useState(true);
-  const [currentBackend, setCurrentBackend] = useState<string>('ollama');
 
-  // 3つのウィンドウ用の状態
+  // 各ウィンドウ用の状態（バックエンド + モデル）
+  const [backend1, setBackend1] = useState<'ollama' | 'vllm'>('ollama');
   const [selectedModel1, setSelectedModel1] = useState<string>('');
+  const [backend2, setBackend2] = useState<'ollama' | 'vllm'>('ollama');
   const [selectedModel2, setSelectedModel2] = useState<string>('');
 
   const [outputs, setOutputs] = useState<ModelOutput>({});
@@ -52,19 +54,19 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 利用可能なモデルとバックエンド情報を取得
+  // 両方のバックエンドからモデル一覧を取得
   useEffect(() => {
-    const fetchModels = async () => {
+    const fetchAllModels = async () => {
       try {
-        const response = await axios.get(`${API_URL}/api/local/models`);
-        const models = response.data.models || [];
-        const backend = response.data.backend || 'ollama';
-        setAvailableModels(models);
-        setCurrentBackend(backend);
+        const response = await axios.get(`${API_URL}/api/all-models`);
+        const ollama = response.data.ollama || [];
+        const vllm = response.data.vllm || [];
+        setOllamaModels(ollama);
+        setVllmModels(vllm);
 
-        // 初期選択（利用可能な場合）
-        if (models.length > 0) setSelectedModel1(models[0]);
-        if (models.length > 1) setSelectedModel2(models[1]);
+        // 初期選択
+        if (ollama.length > 0) setSelectedModel1(ollama[0]);
+        if (ollama.length > 1) setSelectedModel2(ollama[1]);
 
       } catch (err) {
         console.error('モデル一覧の取得に失敗しました:', err);
@@ -72,7 +74,7 @@ function App() {
         setModelLoading(false);
       }
     };
-    fetchModels();
+    fetchAllModels();
   }, []);
 
   // ストリーミング生成を実行
@@ -82,7 +84,14 @@ function App() {
       return;
     }
 
-    const ollamaModelsToRequest = [selectedModel1, selectedModel2].filter(m => m !== '');
+    // 各ウィンドウのモデル + バックエンド情報を作成
+    const localModelsToRequest = [];
+    if (selectedModel1) {
+      localModelsToRequest.push({ model: selectedModel1, backend: backend1 });
+    }
+    if (selectedModel2) {
+      localModelsToRequest.push({ model: selectedModel2, backend: backend2 });
+    }
 
     setLoading(true);
     setError(null);
@@ -93,8 +102,8 @@ function App() {
 
     // 各モデルのストリーミング状態を初期化
     const initialStreamingState: StreamingState = { 'OpenAI GPT-4.1': true };
-    ollamaModelsToRequest.forEach(model => {
-      initialStreamingState[model] = true;
+    localModelsToRequest.forEach(lm => {
+      initialStreamingState[lm.model] = true;
     });
     setIsStreaming(initialStreamingState);
 
@@ -112,7 +121,7 @@ function App() {
         },
         body: JSON.stringify({
           input_text: inputText,
-          ollama_models: ollamaModelsToRequest
+          local_models: localModelsToRequest
         }),
         signal: abortControllerRef.current.signal
       });
@@ -284,9 +293,8 @@ function App() {
       <header className="App-header">
         <div className="header-title">
           <h1>LLM MedGen Tool</h1>
-          <span className={`backend-badge ${currentBackend}`}>
-            {currentBackend === 'vllm' ? 'vLLM' : 'Ollama'}
-          </span>
+          <span className="backend-badge ollama">Ollama: {ollamaModels.length}</span>
+          <span className="backend-badge vllm">vLLM: {vllmModels.length}</span>
         </div>
         <p>複数のLLMによるデータ生成と評価ツール</p>
       </header>
@@ -367,15 +375,27 @@ function App() {
           {/* Window 2: Local Model 1 */}
           <div className="model-window">
             <div className="window-header">
+              <div className="backend-toggle">
+                <button
+                  className={`toggle-btn ${backend1 === 'ollama' ? 'active' : ''}`}
+                  onClick={() => { setBackend1('ollama'); setSelectedModel1(ollamaModels[0] || ''); }}
+                  disabled={loading}
+                >Ollama</button>
+                <button
+                  className={`toggle-btn ${backend1 === 'vllm' ? 'active' : ''}`}
+                  onClick={() => { setBackend1('vllm'); setSelectedModel1(vllmModels[0] || ''); }}
+                  disabled={loading}
+                >vLLM</button>
+              </div>
               <select
                 value={selectedModel1}
                 onChange={(e) => setSelectedModel1(e.target.value)}
                 disabled={modelLoading || loading}
               >
                 <option value="">モデルを選択</option>
-                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                {(backend1 === 'vllm' ? vllmModels : ollamaModels).map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <span className="badge local">Local</span>
+              <span className={`badge ${backend1}`}>{backend1 === 'vllm' ? 'vLLM' : 'Ollama'}</span>
             </div>
             <div className="window-content">
               {(() => {
@@ -400,15 +420,27 @@ function App() {
           {/* Window 3: Local Model 2 */}
           <div className="model-window">
             <div className="window-header">
+              <div className="backend-toggle">
+                <button
+                  className={`toggle-btn ${backend2 === 'ollama' ? 'active' : ''}`}
+                  onClick={() => { setBackend2('ollama'); setSelectedModel2(ollamaModels[0] || ''); }}
+                  disabled={loading}
+                >Ollama</button>
+                <button
+                  className={`toggle-btn ${backend2 === 'vllm' ? 'active' : ''}`}
+                  onClick={() => { setBackend2('vllm'); setSelectedModel2(vllmModels[0] || ''); }}
+                  disabled={loading}
+                >vLLM</button>
+              </div>
               <select
                 value={selectedModel2}
                 onChange={(e) => setSelectedModel2(e.target.value)}
                 disabled={modelLoading || loading}
               >
                 <option value="">モデルを選択</option>
-                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                {(backend2 === 'vllm' ? vllmModels : ollamaModels).map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <span className="badge local">Local</span>
+              <span className={`badge ${backend2}`}>{backend2 === 'vllm' ? 'vLLM' : 'Ollama'}</span>
             </div>
             <div className="window-content">
               {(() => {

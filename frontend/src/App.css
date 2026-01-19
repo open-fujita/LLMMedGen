@@ -185,8 +185,47 @@ section h2 {
   font-weight: bold;
 }
 
-.badge.local {
+.badge.local,
+.badge.ollama {
   background: #38a169;
+}
+
+.badge.vllm {
+  background: #805ad5;
+}
+
+.backend-toggle {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.toggle-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.7rem;
+  border: 1px solid #cbd5e0;
+  background: #f7fafc;
+  color: #4a5568;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.toggle-btn:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.toggle-btn.active {
+  background: #2b6cb0;
+  color: white;
+  border-color: #2b6cb0;
+}
+
+.toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .window-content {
