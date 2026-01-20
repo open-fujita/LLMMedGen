@@ -37,6 +37,7 @@ function App() {
   const [modelLoading, setModelLoading] = useState(true);
 
   // 各ウィンドウ用の状態（バックエンド + モデル）
+  const [includeOpenai, setIncludeOpenai] = useState<boolean>(true);
   const [backend1, setBackend1] = useState<'ollama' | 'vllm'>('ollama');
   const [selectedModel1, setSelectedModel1] = useState<string>('');
   const [backend2, setBackend2] = useState<'ollama' | 'vllm'>('ollama');
@@ -121,7 +122,8 @@ function App() {
         },
         body: JSON.stringify({
           input_text: inputText,
-          local_models: localModelsToRequest
+          local_models: localModelsToRequest,
+          include_openai: includeOpenai
         }),
         signal: abortControllerRef.current.signal
       });
@@ -348,11 +350,22 @@ function App() {
         )}
 
         <section className="windows-section">
-          {/* Window 1: OpenAI GPT-4.1 (Fixed) */}
-          <div className="model-window">
+          {/* Window 1: OpenAI GPT-4.1 (Toggleable) */}
+          <div className={`model-window ${!includeOpenai ? 'disabled' : ''}`}>
             <div className="window-header">
-              <h3>OpenAI GPT-4.1</h3>
-              <span className="badge">Cloud</span>
+              <div className="openai-toggle">
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={includeOpenai}
+                    onChange={(e) => setIncludeOpenai(e.target.checked)}
+                    disabled={loading}
+                  />
+                  <span className="slider"></span>
+                </label>
+                <h3>OpenAI GPT-4.1</h3>
+              </div>
+              <span className="badge">{includeOpenai ? 'ON' : 'OFF'}</span>
             </div>
             <div className="window-content">
               {(() => {

@@ -39,6 +39,7 @@ class GenerationRequest(BaseModel):
     input_text: str
     local_models: List[LocalModelRequest] = []  # バックエンド指定付きモデル
     ollama_models: List[str] = []  # 後方互換性のため残す
+    include_openai: bool = True  # OpenAI GPT-4.1を含めるかどうか
 
 
 class EvaluationRequest(BaseModel):
@@ -218,8 +219,8 @@ async def call_local_llm_stream(model: str, prompt: str, backend: str = None) ->
 
 
 # ストリームジェネレーター
-async def stream_generator(input_text: str, local_models: List[LocalModelRequest] = None, ollama_models: List[str] = None) -> AsyncGenerator[dict, None]:
-    """すべてのLLMの出力をSSEイベントとしてストリーミング（パフォーマンスメトリクス付き）"""""
+async def stream_generator(input_text: str, local_models: List[LocalModelRequest] = None, ollama_models: List[str] = None, include_openai: bool = True) -> AsyncGenerator[dict, None]:
+    """すべてのLLMの出力をSSEイベントとしてストリーミング（パフォーマンスメトリクス付き）"""
     
     # 各モデルのストリーミングタスクを管理
     model_full_outputs = {}
@@ -311,7 +312,9 @@ async def stream_generator(input_text: str, local_models: List[LocalModelRequest
         }
     
     # すべてのジェネレーターを作成
-    generators = [stream_openai()]
+    generators = []
+    if include_openai:
+        generators.append(stream_openai())
     
     # 新形式: LocalModelRequest リスト
     if local_models:
@@ -514,7 +517,7 @@ async def generate(request: GenerationRequest):
 async def generate_stream(request: GenerationRequest):
     """ストリーミングで並列生成"""
     return EventSourceResponse(
-        stream_generator(request.input_text, request.local_models, request.ollama_models)
+        stream_generator(request.input_text, request.local_models, request.ollama_models, request.include_openai)
     )
 
 @app.post("/api/evaluate")
